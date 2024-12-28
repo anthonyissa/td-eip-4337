@@ -19,11 +19,14 @@ import "./core/Helpers.sol";
   *  has a single signer that can send requests through the entryPoint.
   */
 contract SimpleAccount is BaseAccount, UUPSUpgradeable, Initializable {
-    address public owner;
+    mapping(address => bool) public owners;
+    uint256 public numberOfOwners;
 
     IEntryPoint private immutable _entryPoint;
 
-    event SimpleAccountInitialized(IEntryPoint indexed entryPoint, address indexed owner);
+    event SimpleAccountInitialized(IEntryPoint indexed entryPoint, address indexed initialOwner);
+    event OwnerAdded(address indexed newOwner);
+    event OwnerRemoved(address indexed removedOwner);
 
     modifier onlyOwner() {
         _onlyOwner();
@@ -45,7 +48,7 @@ contract SimpleAccount is BaseAccount, UUPSUpgradeable, Initializable {
 
     function _onlyOwner() internal view {
         //directly from EOA owner, or through the account itself (which gets redirected through execute())
-        require(msg.sender == owner || msg.sender == address(this), "only owner");
+        require(msg.sender == address(this) || owners[msg.sender], "only owner");
     }
 
     /**
@@ -91,20 +94,22 @@ contract SimpleAccount is BaseAccount, UUPSUpgradeable, Initializable {
     }
 
     function _initialize(address anOwner) internal virtual {
-        owner = anOwner;
-        emit SimpleAccountInitialized(_entryPoint, owner);
+        owners[anOwner] = true;
+        numberOfOwners = 1;
+        emit SimpleAccountInitialized(_entryPoint, anOwner);
     }
 
     // Require the function call went through EntryPoint or owner
     function _requireFromEntryPointOrOwner() internal view {
-        require(msg.sender == address(entryPoint()) || msg.sender == owner, "account: not Owner or EntryPoint");
+        require(msg.sender == address(entryPoint()) || owners[msg.sender], "account: not Owner or EntryPoint");
     }
 
     /// implement template method of BaseAccount
     function _validateSignature(PackedUserOperation calldata userOp, bytes32 userOpHash)
     internal override virtual returns (uint256 validationData) {
         bytes32 hash = MessageHashUtils.toEthSignedMessageHash(userOpHash);
-        if (owner != ECDSA.recover(hash, userOp.signature))
+        address recoveredAddr = ECDSA.recover(hash, userOp.signature);
+        if (!owners[recoveredAddr])
             return SIG_VALIDATION_FAILED;
         return SIG_VALIDATION_SUCCESS;
     }
@@ -144,5 +149,21 @@ contract SimpleAccount is BaseAccount, UUPSUpgradeable, Initializable {
     function _authorizeUpgrade(address newImplementation) internal view override {
         (newImplementation);
         _onlyOwner();
+    }
+
+    function addOwner(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "invalid owner");
+        require(!owners[newOwner], "already owner");
+        owners[newOwner] = true;
+        numberOfOwners++;
+        emit OwnerAdded(newOwner);
+    }
+
+    function removeOwner(address ownerToRemove) external onlyOwner {
+        require(owners[ownerToRemove], "not owner");
+        require(numberOfOwners > 1, "cannot remove last owner");
+        owners[ownerToRemove] = false;
+        numberOfOwners--;
+        emit OwnerRemoved(ownerToRemove);
     }
 }
